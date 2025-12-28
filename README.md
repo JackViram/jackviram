@@ -1,4 +1,14 @@
--- LocalScript: MouseAimbotWithUI_v6_beautified.lua
+-- Loader + Aimbot (com persistência local para executores)
+-- Suporta queue_on_teleport (syn/fluxus/queue_on_teleport) e salva configurações localmente
+-- usando writefile/readfile/isfile (método comum a executores como Synapse/Fluxus/etc).
+-- Cole/execute este arquivo no seu executor. Ele registra o script para re-execução
+-- após teleport e também o executa imediatamente.
+
+-- ========================
+-- START LOADER (NAO EDITAR)
+-- ========================
+local SCRIPT = [[
+-- LocalScript: MouseAimbotWithUI_v6_beautified.lua (com persistência para executor)
 -- Versão final com rodapé personalizado: caveira, hover e fallback.
 -- Coloque este LocalScript no LocalPlayer (PlayerScripts) ou carregue no CoreGui conforme seu fluxo.
 
@@ -7,11 +17,12 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local ContentProvider = game:GetService("ContentProvider")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 local CoreGui = game:GetService("CoreGui")
 
--- ===== CONFIG =====
+-- ===== CONFIG DEFAULTS =====
 local CONFIG = {
     FOV_RADIUS = 150,
     LOCK_PART = "Head",
@@ -27,6 +38,107 @@ local CONFIG = {
 
 -- Asset id da caveira (fácil de trocar aqui)
 local SKULL_ASSET_ID = "11722153703"
+
+-- ===== Executor persistence (writefile/readfile) =====
+local SETTINGS_FILE = "AimbotSettings.json"
+local hasIsFile = (type(isfile) == "function")
+local hasReadFile = (type(readfile) == "function")
+local hasWriteFile = (type(writefile) == "function")
+
+local function serializeLockKey(k)
+    -- Armazena Enum.UserInputType como "UIT:Name" e Enum.KeyCode como "KeyCode:Name"
+    if typeof(k) == "EnumItem" then
+        if Enum.UserInputType[k.Name] then
+            return "UIT:" .. k.Name
+        elseif Enum.KeyCode[k.Name] then
+            return "KeyCode:" .. k.Name
+        else
+            return "Enum:" .. k.Name
+        end
+    end
+    return tostring(k)
+end
+
+local function deserializeLockKey(s)
+    if type(s) ~= "string" then return Enum.UserInputType.MouseButton2 end
+    local prefix, name = s:match("^(%a+):(.+)$")
+    if prefix == "UIT" and Enum.UserInputType[name] then return Enum.UserInputType[name] end
+    if prefix == "KeyCode" and Enum.KeyCode[name] then return Enum.KeyCode[name] end
+    -- fallback: try directly by name
+    if Enum.UserInputType[s] then return Enum.UserInputType[s] end
+    if Enum.KeyCode[s] then return Enum.KeyCode[s] end
+    return Enum.UserInputType.MouseButton2
+end
+
+local function loadLocalSettings()
+    if not hasIsFile or not hasReadFile then
+        return
+    end
+    if not isfile(SETTINGS_FILE) then
+        return
+    end
+    local ok, content = pcall(function() return readfile(SETTINGS_FILE) end)
+    if not ok or not content then return end
+    local ok2, tbl = pcall(function() return HttpService:JSONDecode(content) end)
+    if not ok2 or type(tbl) ~= "table" then return end
+
+    -- Aplicar valores carregados (com checagens)
+    if type(tbl.FOV_RADIUS) == "number" then CONFIG.FOV_RADIUS = tbl.FOV_RADIUS end
+    if type(tbl.AIM_SENSITIVITY) == "number" then CONFIG.AIM_SENSITIVITY = tbl.AIM_SENSITIVITY end
+    if type(tbl.IGNORE_SNIPER_ZOOM) == "boolean" then CONFIG.IGNORE_SNIPER_ZOOM = tbl.IGNORE_SNIPER_ZOOM end
+    if type(tbl.ENABLED) == "boolean" then CONFIG.ENABLED = tbl.ENABLED end
+    if type(tbl.FOV_VISIBLE) == "boolean" then CONFIG.FOV_VISIBLE = tbl.FOV_VISIBLE end
+    if type(tbl.SMOOTH_AIM) == "boolean" then CONFIG.SMOOTH_AIM = tbl.SMOOTH_AIM end
+    if type(tbl.AUTO_SHOOT) == "boolean" then CONFIG.AUTO_SHOOT = tbl.AUTO_SHOOT end
+    if type(tbl.LOCK_PART) == "string" then CONFIG.LOCK_PART = tbl.LOCK_PART end
+    if type(tbl.LOCK_KEY) == "string" then CONFIG.LOCK_KEY = deserializeLockKey(tbl.LOCK_KEY) end
+    if type(tbl.HIGHLIGHT_COLOR) == "table" then
+        local c = tbl.HIGHLIGHT_COLOR
+        CONFIG.HIGHLIGHT_COLOR = Color3.fromRGB(c.r or 0, c.g or 0, c.b or 0)
+    end
+end
+
+local function saveLocalSettings()
+    if not hasWriteFile then return false end
+    local out = {
+        FOV_RADIUS = CONFIG.FOV_RADIUS,
+        AIM_SENSITIVITY = CONFIG.AIM_SENSITIVITY,
+        IGNORE_SNIPER_ZOOM = CONFIG.IGNORE_SNIPER_ZOOM,
+        ENABLED = CONFIG.ENABLED,
+        FOV_VISIBLE = CONFIG.FOV_VISIBLE,
+        SMOOTH_AIM = CONFIG.SMOOTH_AIM,
+        AUTO_SHOOT = CONFIG.AUTO_SHOOT,
+        LOCK_PART = CONFIG.LOCK_PART,
+        LOCK_KEY = serializeLockKey(CONFIG.LOCK_KEY),
+        HIGHLIGHT_COLOR = {
+            r = math.floor(CONFIG.HIGHLIGHT_COLOR.R * 255 + 0.5),
+            g = math.floor(CONFIG.HIGHLIGHT_COLOR.G * 255 + 0.5),
+            b = math.floor(CONFIG.HIGHLIGHT_COLOR.B * 255 + 0.5),
+        },
+    }
+    local ok, data = pcall(function() return HttpService:JSONEncode(out) end)
+    if not ok or not data then return false end
+    pcall(function() writefile(SETTINGS_FILE, data) end)
+    return true
+end
+
+-- Debounce save (agrupar múltiplas mudanças)
+local savePending = false
+local function scheduleSave()
+    if not hasWriteFile then return end
+    if savePending then return end
+    savePending = true
+    delay(0.9, function()
+        pcall(saveLocalSettings)
+        savePending = false
+    end)
+end
+
+-- Expor API simples (opcional)
+pcall(function() _G.AimbotSettingsExecutor = { GetConfig = function() return CONFIG end, SaveNow = saveLocalSettings, ScheduleSave = scheduleSave } end)
+
+-- Carrega configurações locais (antes de construir UI para refletir valores)
+pcall(function() loadLocalSettings() end)
 
 -- ===== Helpers =====
 local function tweenObject(obj, props, time, style, dir)
@@ -133,7 +245,7 @@ createFov()
 local holding = false
 local activeConnections = {}
 
-local function updateLockKey(newKey) CONFIG.LOCK_KEY = newKey end
+local function updateLockKey(newKey) CONFIG.LOCK_KEY = newKey scheduleSave() end
 
 local function inputBegan(input)
     if input.UserInputType == CONFIG.LOCK_KEY or input.KeyCode == CONFIG.LOCK_KEY then holding = true end
@@ -491,6 +603,9 @@ local toggleAutoShoot = makeToggle(advancedContent,"Auto Shoot",52,CONFIG.AUTO_S
 
 local lockPartOptions = {"Head","Torso","HumanoidRootPart"}
 local lockPartIndex = 1
+for i, v in ipairs(lockPartOptions) do
+    if v == CONFIG.LOCK_PART then lockPartIndex = i break end
+end
 local lockPartBtn = Instance.new("TextButton", advancedContent)
 lockPartBtn.Size = UDim2.new(0,150,0,28)
 lockPartBtn.Position = UDim2.new(0,12,0,100)
@@ -507,12 +622,13 @@ lockPartBtn.MouseButton1Click:Connect(function()
     if lockPartIndex > #lockPartOptions then lockPartIndex = 1 end
     CONFIG.LOCK_PART = lockPartOptions[lockPartIndex]
     lockPartBtn.Text = "LOCK_PART: "..CONFIG.LOCK_PART
+    scheduleSave()
 end)
 
 local lockKeyBtn = Instance.new("TextButton", advancedContent)
 lockKeyBtn.Size = UDim2.new(0,180,0,28)
 lockKeyBtn.Position = UDim2.new(0,12,0,140)
-lockKeyBtn.Text = "BOTÃO AIMBOT: "..( (type(CONFIG.LOCK_KEY) == "userdata" and CONFIG.LOCK_KEY.Name) or tostring(CONFIG.LOCK_KEY) )
+lockKeyBtn.Text = "BOTÃO AIMBOT: "..( (typeof(CONFIG.LOCK_KEY) == "EnumItem" and CONFIG.LOCK_KEY.Name) or tostring(CONFIG.LOCK_KEY) )
 lockKeyBtn.Font = Enum.Font.GothamSemibold
 lockKeyBtn.TextSize = 14
 lockKeyBtn.TextColor3 = THEME.Text
@@ -539,6 +655,7 @@ lockKeyBtn.MouseButton1Click:Connect(function()
                 lockKeyBtn.Text = "BOTÃO AIMBOT: "..tostring(input.KeyCode)
             end
         end
+        scheduleSave()
         connection:Disconnect()
     end)
 end)
@@ -603,6 +720,7 @@ for i, s in ipairs(swatches) do
         CONFIG.HIGHLIGHT_COLOR = s.color
         preview.BackgroundColor3 = s.color
         updateAllHighlightsColor(s.color)
+        scheduleSave()
     end)
     -- hover effect
     btn.MouseEnter:Connect(function() tweenObject(btn, {Size = UDim2.new(0, swatchSize+4, 0, swatchSize+4)}, 0.12) end)
@@ -625,13 +743,15 @@ resetBtn.MouseButton1Click:Connect(function()
     CONFIG.HIGHLIGHT_COLOR = Color3.fromRGB(0,255,0)
     preview.BackgroundColor3 = CONFIG.HIGHLIGHT_COLOR
     updateAllHighlightsColor(CONFIG.HIGHLIGHT_COLOR)
+    scheduleSave()
 end)
 
--- Make toggle buttons functional
+-- Make toggle buttons functional (adicionando scheduleSave() nos handlers)
 toggleEnable.MouseButton1Click:Connect(function()
     CONFIG.ENABLED = not CONFIG.ENABLED
     toggleEnable.Text = CONFIG.ENABLED and "ON" or "OFF"
     toggleEnable.BackgroundColor3 = CONFIG.ENABLED and Color3.fromRGB(30,135,84) or Color3.fromRGB(60,60,60)
+    scheduleSave()
 end)
 
 toggleFOV.MouseButton1Click:Connect(function()
@@ -639,45 +759,74 @@ toggleFOV.MouseButton1Click:Connect(function()
     toggleFOV.Text = CONFIG.FOV_VISIBLE and "ON" or "OFF"
     toggleFOV.BackgroundColor3 = CONFIG.FOV_VISIBLE and Color3.fromRGB(30,135,84) or Color3.fromRGB(60,60,60)
     if FOVCircle then pcall(function() FOVCircle.Visible = CONFIG.FOV_VISIBLE end) end
+    scheduleSave()
 end)
 
 toggleIgnoreSniper.MouseButton1Click:Connect(function()
     CONFIG.IGNORE_SNIPER_ZOOM = not CONFIG.IGNORE_SNIPER_ZOOM
     toggleIgnoreSniper.Text = CONFIG.IGNORE_SNIPER_ZOOM and "ON" or "OFF"
     toggleIgnoreSniper.BackgroundColor3 = CONFIG.IGNORE_SNIPER_ZOOM and Color3.fromRGB(30,135,84) or Color3.fromRGB(60,60,60)
+    scheduleSave()
 end)
 
 toggleSmooth.MouseButton1Click:Connect(function()
     CONFIG.SMOOTH_AIM = not CONFIG.SMOOTH_AIM
     toggleSmooth.Text = CONFIG.SMOOTH_AIM and "ON" or "OFF"
     toggleSmooth.BackgroundColor3 = CONFIG.SMOOTH_AIM and Color3.fromRGB(30,135,84) or Color3.fromRGB(60,60,60)
+    scheduleSave()
 end)
 
 toggleAutoShoot.MouseButton1Click:Connect(function()
     CONFIG.AUTO_SHOOT = not CONFIG.AUTO_SHOOT
     toggleAutoShoot.Text = CONFIG.AUTO_SHOOT and "ON" or "OFF"
     toggleAutoShoot.BackgroundColor3 = CONFIG.AUTO_SHOOT and Color3.fromRGB(30,135,84) or Color3.fromRGB(60,60,60)
+    scheduleSave()
 end)
 
-toggleESP.MouseButton1Click:Connect(function()
-    ESPEnabled = not ESPEnabled
-    toggleESP.Text = ESPEnabled and "ON" or "OFF"
-    toggleESP.BackgroundColor3 = ESPEnabled and Color3.fromRGB(30,135,84) or Color3.fromRGB(60,60,60)
+-- Substitui o handler direto por uma função reutilizável e adiciona atalho (seta para baixo)
+-- Função utilitária para ativar/desativar ESP (usar no botão e na tecla)
+local function setESPEnabled(value)
+    ESPEnabled = value
+    -- Atualiza botão visual (se existir)
+    if toggleESP then
+        toggleESP.Text = ESPEnabled and "ON" or "OFF"
+        toggleESP.BackgroundColor3 = ESPEnabled and Color3.fromRGB(30,135,84) or Color3.fromRGB(60,60,60)
+    end
+
+    -- Cria ou remove highlights
     if ESPEnabled then
-        -- create highlights for current players using selected color
         for _, plr in pairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChildOfClass("Humanoid") then
+                -- createHighlight já destrói o highlight anterior se existir
                 createHighlight(plr)
             end
         end
         updateAllHighlightsColor(CONFIG.HIGHLIGHT_COLOR)
     else
         for _, highlight in pairs(ESPContainers) do
-            highlight:Destroy()
+            pcall(function() highlight:Destroy() end)
         end
         ESPContainers = {}
     end
+
+    scheduleSave()
+end
+
+-- Conecta o botão do UI para usar a função centralizada
+if toggleESP then
+    toggleESP.MouseButton1Click:Connect(function()
+        setESPEnabled(not ESPEnabled)
+    end)
+end
+
+-- Atalho: Seta para baixo para alternar ESP (Down Arrow)
+local downToggleConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.Down then
+        setESPEnabled(not ESPEnabled)
+    end
 end)
+table.insert(activeConnections, downToggleConn)
 
 -- Tab switching & selection handling
 local function setCategorySelected(selectedBtn)
@@ -802,12 +951,26 @@ if skullImg and skullImg.Parent then
     end)
 end
 
--- Update config from sliders
+-- Update config from sliders (com detecção de mudança para salvar)
 spawn(function()
+    local prevSens = CONFIG.AIM_SENSITIVITY
+    local prevFov = CONFIG.FOV_RADIUS
     while true do
         wait(0.05)
-        CONFIG.AIM_SENSITIVITY = sensSlider.getValue()
-        CONFIG.FOV_RADIUS = fovSlider.getValue()
+        local newSens = sensSlider.getValue()
+        local newFov = fovSlider.getValue()
+        if newSens ~= CONFIG.AIM_SENSITIVITY then
+            CONFIG.AIM_SENSITIVITY = newSens
+        end
+        if newFov ~= CONFIG.FOV_RADIUS then
+            CONFIG.FOV_RADIUS = newFov
+        end
+        -- detecta mudanças e agenda salvamento
+        if math.abs(prevSens - CONFIG.AIM_SENSITIVITY) > 1e-6 or math.abs(prevFov - CONFIG.FOV_RADIUS) > 1e-6 then
+            prevSens = CONFIG.AIM_SENSITIVITY
+            prevFov = CONFIG.FOV_RADIUS
+            scheduleSave()
+        end
     end
 end)
 
@@ -819,6 +982,8 @@ local function ToggleUI()
 end
 btnMinimize.MouseButton1Click:Connect(function() ToggleUI() end)
 btnEject.MouseButton1Click:Connect(function()
+    -- salvar antes de ejetar/remover
+    pcall(saveLocalSettings)
     for _, conn in pairs(activeConnections) do pcall(function() conn:Disconnect() end) end
     if aimbotConnection then pcall(function() aimbotConnection:Disconnect() end) end
     if FOVCircle then pcall(function() FOVCircle:Remove() end) end
@@ -830,6 +995,7 @@ end)
 -- Keyboard shortcuts
 local deleteConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if input.KeyCode == Enum.KeyCode.Delete and not gameProcessed then
+        pcall(saveLocalSettings)
         for _, conn in pairs(activeConnections) do pcall(function() conn:Disconnect() end) end
         if aimbotConnection then pcall(function() aimbotConnection:Disconnect() end) end
         if FOVCircle then pcall(function() FOVCircle:Remove() end) end
@@ -903,5 +1069,51 @@ end
 local accentConn = RunService.RenderStepped:Connect(updateAccentColor)
 table.insert(activeConnections, accentConn)
 
+-- Garante que os sliders e previews comecem com os valores carregados
+pcall(function()
+    if sensSlider and sensSlider.setValue then sensSlider.setValue(CONFIG.AIM_SENSITIVITY) end
+    if fovSlider and fovSlider.setValue then fovSlider.setValue(CONFIG.FOV_RADIUS) end
+    preview.BackgroundColor3 = CONFIG.HIGHLIGHT_COLOR
+end)
+
+-- Salva inicial (garante arquivo criado)
+pcall(function() scheduleSave() end)
+
 -- End of GUI
 -- Script funcional (ESP, aimbot, etc.) mantido.
+]]
+
+-- Tenta registrar para queue_on_teleport (vários executores)
+local function try_queue_on_teleport(s)
+    local ok, res = pcall(function()
+        if syn and syn.queue_on_teleport then
+            syn.queue_on_teleport(s)
+            return true
+        elseif queue_on_teleport then
+            queue_on_teleport(s)
+            return true
+        elseif fluxus and fluxus.queue_on_teleport then
+            fluxus.queue_on_teleport(s)
+            return true
+        end
+        return false
+    end)
+    return ok and res
+end
+
+pcall(function() try_queue_on_teleport(SCRIPT) end)
+
+-- Tenta executar o script agora (em muitos executores loadstring ou load existe)
+local loader = loadstring or load
+if loader then
+    local ok, fn = pcall(loader, SCRIPT)
+    if ok and fn then
+        pcall(function() fn() end)
+    end
+else
+    -- Se não houver loadstring/load (ambiente Roblox normal), o script deve estar
+    -- colocado em StarterPlayerScripts para rodar automaticamente em cada servidor.
+    -- Se você tem acesso ao jogo: mover o LocalScript para StarterPlayer > StarterPlayerScripts resolve o problema.
+end
+
+-- Fim do loader
