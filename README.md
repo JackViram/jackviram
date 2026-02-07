@@ -994,7 +994,7 @@ end)
 
 -- Keyboard shortcuts
 local deleteConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if input.KeyCode == Enum.KeyCode.Delete and not gameProcessed then
+    if input.KeyCode == Enum.KeyCode.F12 and not gameProcessed then
         pcall(saveLocalSettings)
         for _, conn in pairs(activeConnections) do pcall(function() conn:Disconnect() end) end
         if aimbotConnection then pcall(function() aimbotConnection:Disconnect() end) end
@@ -1007,7 +1007,7 @@ end)
 table.insert(activeConnections, deleteConn)
 
 local rcConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if input.KeyCode == Enum.KeyCode.RightControl and not gameProcessed then ToggleUI() end
+    if input.KeyCode == Enum.KeyCode.RightAlt and not gameProcessed then ToggleUI() end
 end)
 table.insert(activeConnections, rcConn)
 table.insert(activeConnections, ESPConnection)
