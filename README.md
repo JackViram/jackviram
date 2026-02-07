@@ -994,7 +994,7 @@ end)
 
 -- Keyboard shortcuts
 local deleteConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if input.KeyCode == Enum.KeyCode.F12 and not gameProcessed then
+    if input.KeyCode == Enum.KeyCode.Delete and not gameProcessed then
         pcall(saveLocalSettings)
         for _, conn in pairs(activeConnections) do pcall(function() conn:Disconnect() end) end
         if aimbotConnection then pcall(function() aimbotConnection:Disconnect() end) end
